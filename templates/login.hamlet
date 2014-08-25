@@ -1,0 +1,3 @@
+<form method="get" action="@{tm forwardUrl}">
+    <input id="#{ident}" type="hidden" name="openid_identifier" value="http://steamcommunity.com/openid">
+    <input type="submit" value="Log in through Steam">
