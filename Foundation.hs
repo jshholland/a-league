@@ -1,19 +1,17 @@
 module Foundation where
 
 import Prelude
-import Data.Text (Text)
-import qualified Data.Text as T
 import Yesod
 import Yesod.Static
 import Yesod.Auth
-import Yesod.Auth.OpenId
+import Yesod.Auth.BrowserId
 import Yesod.Default.Config
 import Yesod.Default.Util (addStaticContentExternal)
 import Network.HTTP.Client.Conduit (Manager, HasHttpManager (getHttpManager))
 import qualified Settings
 import Settings.Development (development)
 import qualified Database.Persist
-import Database.Persist.Sql (SqlPersistT)
+import Database.Persist.Sql (SqlBackend)
 import Settings.StaticFiles
 import Settings (widgetFile, Extra (..))
 import Model
@@ -65,7 +63,6 @@ instance Yesod App where
     defaultLayout widget = do
         master <- getYesod
         mmsg <- getMessage
-        mauth <- maybeAuthId
 
         -- We break up the default layout into two components:
         -- default-layout is the contents of the body tag, and
@@ -74,12 +71,9 @@ instance Yesod App where
         -- you to use normal widget features in default-layout.
 
         pc <- widgetToPageContent $ do
-            addStylesheetRemote "//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css"
-            addStylesheetRemote "//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap-theme.min.css"
-            addScriptRemote "//ajax.googleapis.com/ajax/libs/jquery/1.9.0/jquery.min.js"
-            addScriptRemote "//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js"
+            addStylesheet $ StaticR css_bootstrap_css
             $(widgetFile "default-layout")
-        giveUrlRenderer $(hamletFile "templates/default-layout-wrapper.hamlet")
+        withUrlRenderer $(hamletFile "templates/default-layout-wrapper.hamlet")
 
     -- This is done to provide an optimization for serving static files from
     -- a separate domain. Please see the staticRoot setting in Settings.hs
@@ -89,6 +83,13 @@ instance Yesod App where
 
     -- The page to be redirected to when authentication is required.
     authRoute _ = Just $ AuthR LoginR
+
+    -- Routes not requiring authenitcation.
+    isAuthorized (AuthR _) _ = return Authorized
+    isAuthorized FaviconR _ = return Authorized
+    isAuthorized RobotsR _ = return Authorized
+    -- Default to Authorized for now.
+    isAuthorized _ _ = return Authorized
 
     -- This function creates static content files in the static folder
     -- and names them based on a hash of their content. This allows
@@ -114,13 +115,13 @@ instance Yesod App where
 
 -- How to run database actions.
 instance YesodPersist App where
-    type YesodPersistBackend App = SqlPersistT
+    type YesodPersistBackend App = SqlBackend
     runDB = defaultRunDB persistConfig connPool
 instance YesodPersistRunner App where
     getDBRunner = defaultGetDBRunner connPool
-    
+
 instance YesodAuth App where
-    type AuthId App = Text
+    type AuthId App = UserId
 
     -- Where to send a user after successful login
     loginDest _ = HomeR
@@ -130,20 +131,19 @@ instance YesodAuth App where
     getAuthId creds = runDB $ do
         x <- getBy $ UniqueUser $ credsIdent creds
         case x of
-            Just (Entity _ user) -> return $ Just $ userIdent user
+            Just (Entity uid _) -> return $ Just uid
             Nothing -> do
-               insert $ User $ credsIdent creds
-               return $ Just $ credsIdent creds
+                fmap Just $ insert User
+                    { userIdent = credsIdent creds
+                    , userPassword = Nothing
+                    }
 
     -- You can add other plugins like BrowserID, email or OAuth here
-    authPlugins _ = [(authOpenId Claimed []) { apLogin = \tm -> do
-      ident <- newIdent
-      $(widgetFile "login")
-    }]
-    
-    maybeAuthId = return Nothing
+    authPlugins _ = [authBrowserId def]
 
     authHttpManager = httpManager
+
+instance YesodAuthPersist App
 
 -- This instance is required to use forms. You can modify renderMessage to
 -- achieve customized and internationalized form validation messages.
